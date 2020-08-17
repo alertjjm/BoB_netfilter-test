@@ -1,12 +1,14 @@
-#include <stdio.h>
-#include <stdlib.h>
+#include <cstdio>
+#include <cstdlib>
 #include <unistd.h>
 #include <netinet/in.h>
 #include <linux/types.h>
 #include <linux/netfilter.h>		/* for NF_ACCEPT */
 #include <errno.h>
-
+#include "httphdr.h"
+#include <iostream>
 #include <libnetfilter_queue/libnetfilter_queue.h>
+using namespace std;
 void dump(unsigned char* buf, int size) {
 	int i;
 	for (i = 0; i < size; i++) {
@@ -63,7 +65,11 @@ static u_int32_t print_pkt (struct nfq_data *tb)
 
 	ret = nfq_get_payload(tb, &data);
 	if (ret >= 0){
-        dump(data, ret);
+		printf("\n1\n");
+		string pckt=string(reinterpret_cast<char*>(data));
+		printf("2\n");
+        HttpHdr httphdr=HttpHdr(pckt);
+		cout<<httphdr.getHost()<<endl;
 		printf("payload_len=%d ", ret);
     }
 	fputc('\n', stdout);

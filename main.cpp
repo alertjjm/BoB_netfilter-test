@@ -11,76 +11,51 @@
 #include "iphdr.h"
 #include "tcphdr.h"
 #include <iostream>
+#include <vector>
+#include <string>
 #include <libnetfilter_queue/libnetfilter_queue.h>
 #define IPV4 0x0800
 using namespace std;
-void dump(unsigned char* buf, int size) {
-	int i;
-	for (i = 0; i < size; i++) {
-		if (i % 16 == 0)
-			printf("\n");
-		printf("%02x ", buf[i]);
-	}
-}
+int netfilterswitch=NF_ACCEPT;//global variable which switches DROP/ACCEPT
+vector<string> sites;
 /* returns packet id */
 static u_int32_t print_pkt (struct nfq_data *tb)
 {
 	int id = 0;
+	netfilterswitch=NF_ACCEPT;
 	struct nfqnl_msg_packet_hdr *ph;
 	struct nfqnl_msg_packet_hw *hwph;
 	u_int32_t mark,ifi;
 	int ret;
 	unsigned char *data;
-
 	ph = nfq_get_msg_packet_hdr(tb);
-	if (ph) {
+	if (ph)
 		id = ntohl(ph->packet_id);
-	}
 	hwph = nfq_get_packet_hw(tb);
-	/*
-	if (hwph) {
-		int i, hlen = ntohs(hwph->hw_addrlen);
-
-		printf("hw_src_addr=");
-		for (i = 0; i < hlen-1; i++)
-			printf("%02x:", hwph->hw_addr[i]);
-		printf("%02x ", hwph->hw_addr[hlen-1]);
-	}
-	*/
 	mark = nfq_get_nfmark(tb);
-	//if (mark)
-	//	printf("mark=%u ", mark);
-
 	ifi = nfq_get_indev(tb);
-	//if (ifi)
-	//	printf("indev=%u ", ifi);
-
 	ifi = nfq_get_outdev(tb);
-	//if (ifi)
-	//	printf("outdev=%u ", ifi);
 	ifi = nfq_get_physindev(tb);
-	//if (ifi)
-	//	printf("physindev=%u ", ifi);
-
 	ifi = nfq_get_physoutdev(tb);
-	//if (ifi)
-	//	printf("physoutdev=%u ", ifi);
-
 	ret = nfq_get_payload(tb, &data);
 	if (ret >= 0){
-		if(ntohs(ph->hw_protocol)==IPV4){
+		if(ntohs(ph->hw_protocol)==IPV4){//if packet protocol is ipv4
 			IpHdr* iphdr=(IpHdr*)data;
 			int ip_len=iphdr->IP_HL()*4;
-			if(iphdr->ip_p==IpHdr::TCP){
+			if(iphdr->ip_p==IpHdr::TCP){//if packet protocol is tcp
 				TcpHdr* tcphdr=(TcpHdr*)(data+ip_len);
 				int tcp_len=tcphdr->TH_OFF()*4;
 				int payload_len=ntohs(iphdr->ip_len)-ip_len-tcp_len;
-				if(payload_len>0){
+				if(payload_len>0){//if payload exists
 					u_char* payload=data+ip_len+tcp_len;
 					string pckt=string(reinterpret_cast<char*>(payload));
-					HttpHdr httphdr=HttpHdr(pckt, ret);
-					if(httphdr.getHost()!="")
-						cout<<"HOST CATCHED: "<<httphdr.getHost()<<endl;
+					HttpHdr httphdr=HttpHdr(pckt, ret);//create httphdr instance
+					for(vector<string>::iterator iter=sites.begin(); iter!=sites.end(); ++iter){
+						if(*iter==httphdr.getHost()){
+							netfilterswitch=NF_DROP;
+							cout<<*iter<<" DROPPED!!"<<endl;
+						}
+					}
 				}
 			}
 		}
@@ -88,23 +63,24 @@ static u_int32_t print_pkt (struct nfq_data *tb)
 	return id;
 }
 
-
 static int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
 	      struct nfq_data *nfa, void *data)
 {
 	u_int32_t id = print_pkt(nfa);
-	return nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
+	return nfq_set_verdict(qh, id, netfilterswitch, 0, NULL);
 }
 
 int main(int argc, char **argv)
 {
+	for(int i=1; i<argc; i++)
+		sites.push_back(string(argv[i]));
 	struct nfq_handle *h;
 	struct nfq_q_handle *qh;
 	struct nfnl_handle *nh;
 	int fd;
 	int rv;
 	char buf[4096] __attribute__ ((aligned));
-
+	
 	printf("opening library handle\n");
 	h = nfq_open();
 	if (!h) {
@@ -141,17 +117,9 @@ int main(int argc, char **argv)
 
 	for (;;) {
 		if ((rv = recv(fd, buf, sizeof(buf), 0)) >= 0) {
-			//printf("pkt received\n");
 			nfq_handle_packet(h, buf, rv);
 			continue;
 		}
-		/* if your application is too slow to digest the packets that
-		 * are sent from kernel-space, the socket buffer that we use
-		 * to enqueue packets may fill up returning ENOBUFS. Depending
-		 * on your application, this error may be ignored. nfq_nlmsg_verdict_putPlease, see
-		 * the doxygen documentation of this library on how to improve
-		 * this situation.
-		 */
 		if (rv < 0 && errno == ENOBUFS) {
 			printf("losing packets!\n");
 			continue;
